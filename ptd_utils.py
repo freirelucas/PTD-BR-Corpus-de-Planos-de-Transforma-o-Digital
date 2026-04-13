@@ -1,8 +1,67 @@
-# ptd_utils.py — Utilidades reutilizaveis do repo teste
-# Migrado de: ptd_pipeline_v30.py (_is_risk_table, is_image_pdf)
-# + blocklist de siglas fantasma (NOVA_SESSAO_BRIEFING.md, III-A5)
+# ptd_utils.py — Utilidades reutilizaveis do pipeline PTD-BR v2
+# Migrado de: ptd_pipeline_v30.py + descobertas Docling (2026-04-13)
 
 import re
+from unicodedata import normalize, category
+
+# -- Pos-processamento de texto extraido --
+
+
+def fix_glued_words(text: str) -> str:
+    """Insere espaco entre minuscula e maiuscula (daQualidade → da Qualidade).
+
+    Cobre 100% dos grudados [a-z][A-Z] encontrados em PDFs nativos (ANAC)
+    e escaneados (AGU). Sem falsos positivos observados.
+    """
+    return re.sub(r"([a-záéíóúãõç])([A-ZÁÉÍÓÚÃÕÇ])", r"\1 \2", text)
+
+
+def clean_ocr_artifacts(text: str) -> str:
+    """Remove pipes de borda de celula e espacos extras (artefatos Tesseract)."""
+    text = text.strip("| ")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def normalize_cell_text(text: str) -> str:
+    """Pipeline completo de limpeza para texto de celula de tabela.
+
+    Ordem: strip artefatos OCR → corrigir grudados.
+    Nao usa dicionario — so regex deterministico.
+    """
+    if not text:
+        return ""
+    text = clean_ocr_artifacts(text)
+    text = fix_glued_words(text)
+    return text
+
+
+def spaceless(text: str) -> str:
+    """Remove espacos e acentos para matching tolerante a grudados.
+
+    'Integração à ferramenta de avaliação' e 'Integracaoaferramentadeavaliacao'
+    ficam ambos 'integracaoaferramentadeavaliacao' → match exato.
+    """
+    nfd = normalize("NFD", text)
+    stripped = "".join(c for c in nfd if category(c) != "Mn")
+    return re.sub(r"\s+", "", stripped).casefold()
+
+
+def pdf_has_native_text(filepath: str, min_chars: int = 50) -> bool:
+    """Detecta se PDF tem texto nativo (True) ou e imagem pura (False).
+
+    Usa pypdfium2 para extrair texto sem OCR. Se qualquer pagina tem
+    mais que min_chars, considera nativo.
+    """
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(filepath)
+    for i in range(len(pdf)):
+        text = pdf[i].get_textpage().get_text_range()
+        if len(text) > min_chars:
+            return True
+    return False
+
 
 # -- Detector de tabela de risco [Briefing III-A2] --
 RISK_MARKERS = {"risco", "probabilidade", "impacto", "severidade", "mitigacao", "ameaca"}
@@ -14,19 +73,9 @@ def is_risk_table(headers: list[str]) -> bool:
     return len(normalized & RISK_MARKERS) >= 2
 
 
-# -- Detector de PDF-imagem [Briefing III-A4] --
-def is_image_pdf(text_extracted: str, total_chars_expected: int) -> bool:
-    """Retorna True se pagina e provavelmente imagem (>80% NaN)."""
-    if total_chars_expected == 0:
-        return True
-    nan_ratio = 1 - (len(text_extracted.strip()) / total_chars_expected)
-    return nan_ratio > 0.8
-
-
-# -- Config OCR por sigla --
+# -- Config OCR por sigla (legacy — mantido para compatibilidade) --
 OCR_CONFIG = {
     "DEFAULT": {"dpi": 300, "psm": 6, "lang": "por"},
-    "MEC": {"dpi": 400, "psm": 6, "lang": "por"},
 }
 
 

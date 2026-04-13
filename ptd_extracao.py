@@ -1,13 +1,14 @@
-# ptd_extracao.py — Estagio 2: Extracao
-# Docling (texto nativo) + Tesseract OCR (fallback imagem)
-# Preserva ProvenanceItem completo (page_no + bbox + charspan)
-# Parte de S1 (Operacoes) do pipeline PTD-BR v2
+# ptd_extracao.py — Estagio 2: Extracao de tabelas de PDFs
+# Docling com deteccao automatica de PDF nativo vs escaneado
+# Tesseract OCR para PDFs-imagem, texto nativo para os demais
+# Pos-processamento: normalize_cell_text (fix grudados + strip artefatos)
+# Corrigido com base em descobertas factuais (2026-04-13)
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from ptd_utils import is_risk_table, is_image_pdf, OCR_CONFIG
+from ptd_utils import is_risk_table, normalize_cell_text, pdf_has_native_text
 
 logger = logging.getLogger("ptd_extracao")
 
@@ -22,10 +23,41 @@ class TabelaExtraida:
     tabela_idx: int
     headers: list[str]
     rows: list[list[str]]
-    # Proveniencia Docling (preservada, nao descartada)
-    bbox: dict | None = None  # {"l": float, "t": float, "r": float, "b": float}
+    bbox: dict | None = None
     charspan: tuple[int, int] | None = None
     is_risk: bool = False
+
+
+def _build_converter(filepath: str):
+    """Constroi DocumentConverter com OCR adequado ao tipo de PDF.
+
+    - PDF com texto nativo: OCR desligado (mais rapido, sem artefatos)
+    - PDF escaneado (imagem): Tesseract CLI com lang=por
+    """
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.base_models import InputFormat
+
+    native = pdf_has_native_text(filepath)
+    pipeline_opts = PdfPipelineOptions()
+
+    if native:
+        pipeline_opts.do_ocr = False
+        logger.info("PDF nativo detectado — OCR desligado")
+    else:
+        from docling.datamodel.pipeline_options import TesseractCliOcrOptions
+        pipeline_opts.do_ocr = True
+        pipeline_opts.ocr_options = TesseractCliOcrOptions(
+            lang=["por"],
+            force_full_page_ocr=True,
+        )
+        logger.info("PDF escaneado detectado — Tesseract OCR ativado")
+
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
+        }
+    )
 
 
 def extrair_tabelas_pdf(
@@ -33,66 +65,64 @@ def extrair_tabelas_pdf(
     sha256: str,
     sigla: str,
 ) -> list[TabelaExtraida]:
-    """Extrai tabelas de um PDF usando Docling, com OCR fallback.
-    
-    Retorna lista de TabelaExtraida com proveniencia completa.
-    Filtra tabelas de risco via is_risk_table().
+    """Extrai tabelas de um PDF usando Docling.
+
+    Detecta automaticamente PDF nativo vs escaneado.
+    Aplica normalize_cell_text em todo texto de celula.
     """
     path = Path(filepath)
     logger.info("Extraindo: %s (%s)", path.name, sigla)
 
     try:
-        from docling.document_converter import DocumentConverter
-        converter = DocumentConverter()
+        converter = _build_converter(str(path))
         result = converter.convert(str(path))
     except Exception as e:
         logger.error("Docling falhou em %s: %s", path.name, e)
         return []
 
-    tabelas = []
     doc = result.document
+    tabelas = []
 
-    for item_idx, item in enumerate(doc.tables if hasattr(doc, "tables") else []):
-        # Proveniencia: extrair page_no e bbox do ProvenanceItem
+    for item_idx, item in enumerate(doc.tables):
+        # Proveniencia
         page_no = 0
         bbox_dict = None
         charspan_val = None
 
-        if hasattr(item, "prov") and item.prov:
+        if item.prov:
             prov = item.prov[0]
-            page_no = prov.page_no if hasattr(prov, "page_no") else 0
-            if hasattr(prov, "bbox") and prov.bbox:
+            page_no = getattr(prov, "page_no", 0)
+            if prov.bbox:
                 b = prov.bbox
                 bbox_dict = {"l": b.l, "t": b.t, "r": b.r, "b": b.b}
-            if hasattr(prov, "charspan"):
-                charspan_val = prov.charspan
+            charspan_val = getattr(prov, "charspan", None)
 
-        # Extrair headers e rows da TableData
-        table_data = item.data if hasattr(item, "data") else None
-        if not table_data:
+        # Extrair headers e rows via table_cells
+        table_data = getattr(item, "data", None)
+        if not table_data or not table_data.table_cells:
             continue
+
+        cells = table_data.table_cells
+        max_row = max(c.start_row_offset_idx for c in cells)
 
         headers = []
         rows = []
 
-        if hasattr(table_data, "table_cells") and table_data.table_cells:
-            # Organizar celulas por row
-            max_row = max(c.start_row_offset_idx for c in table_data.table_cells)
-            for row_idx in range(max_row + 1):
-                row_cells = sorted(
-                    [c for c in table_data.table_cells if c.start_row_offset_idx == row_idx],
-                    key=lambda c: c.start_col_offset_idx,
-                )
-                texts = [c.text.strip() if c.text else "" for c in row_cells]
-                if row_idx == 0:
-                    headers = texts
-                else:
-                    rows.append(texts)
+        for row_idx in range(max_row + 1):
+            row_cells = sorted(
+                [c for c in cells if c.start_row_offset_idx == row_idx],
+                key=lambda c: c.start_col_offset_idx,
+            )
+            texts = [normalize_cell_text(c.text) if c.text else "" for c in row_cells]
 
-        # Filtrar tabelas de risco
+            if row_idx == 0:
+                headers = texts
+            else:
+                rows.append(texts)
+
         risk = is_risk_table(headers)
         if risk:
-            logger.debug("Tabela de risco detectada (pag %d, idx %d) — marcada", page_no, item_idx)
+            logger.debug("Tabela de risco (pag %d, idx %d)", page_no, item_idx)
 
         tabelas.append(TabelaExtraida(
             sigla=sigla,
@@ -107,57 +137,6 @@ def extrair_tabelas_pdf(
             is_risk=risk,
         ))
 
-    # OCR fallback: se nenhuma tabela extraida, tentar OCR
-    if not tabelas:
-        logger.info("Nenhuma tabela Docling em %s — tentando OCR fallback", path.name)
-        tabelas = _ocr_fallback(path, sha256, sigla)
-
     logger.info("Extraidas %d tabelas de %s (%d risco)",
                 len(tabelas), path.name, sum(1 for t in tabelas if t.is_risk))
-    return tabelas
-
-
-def _ocr_fallback(path: Path, sha256: str, sigla: str) -> list[TabelaExtraida]:
-    """Fallback OCR para PDFs-imagem. Usa config per-sigla."""
-    try:
-        import pytesseract
-        from pdf2image import convert_from_path
-    except ImportError:
-        logger.warning("pytesseract/pdf2image nao instalados — OCR skip")
-        return []
-
-    config = OCR_CONFIG.get(sigla, OCR_CONFIG["DEFAULT"])
-    dpi = config["dpi"]
-    lang = config["lang"]
-
-    logger.info("OCR fallback: %s com DPI=%d", path.name, dpi)
-
-    try:
-        images = convert_from_path(str(path), dpi=dpi)
-    except Exception as e:
-        logger.error("pdf2image falhou em %s: %s", path.name, e)
-        return []
-
-    tabelas = []
-    for page_idx, img in enumerate(images):
-        text = pytesseract.image_to_string(img, lang=lang)
-        if not text.strip():
-            continue
-        # OCR retorna texto corrido — criar tabela simplificada
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        if len(lines) < 2:
-            continue
-        tabelas.append(TabelaExtraida(
-            sigla=sigla,
-            pdf_sha256=sha256,
-            pdf_filename=path.name,
-            pagina=page_idx + 1,
-            tabela_idx=0,
-            headers=["ocr_text"],
-            rows=[[l] for l in lines],
-            bbox=None,
-            charspan=None,
-            is_risk=False,
-        ))
-
     return tabelas
