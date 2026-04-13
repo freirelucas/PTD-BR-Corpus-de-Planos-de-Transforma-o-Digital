@@ -116,7 +116,14 @@ def extrair_tabelas_pdf(
             texts = [normalize_cell_text(c.text) if c.text else "" for c in row_cells]
 
             if row_idx == 0:
-                headers = texts
+                # Detectar se row 0 e header real (column_header=True)
+                is_header = any(getattr(c, "column_header", False) for c in row_cells)
+                if is_header:
+                    headers = texts
+                else:
+                    # Tabela sem header (ex: AGU tabela 1 — continuacao)
+                    headers = [str(i) for i in range(len(texts))]
+                    rows.append(texts)
             else:
                 rows.append(texts)
 

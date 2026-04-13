@@ -1,7 +1,6 @@
 # ptd_constants.py — PTD-BR v2
 # Fonte unica de verdade: eixos EFGD, padroes regex, diretorios
-# Migrado de freirelucas/teste (ptd_constants.py), paths ajustados
-# IPEA / COGIT / DIEST
+# Regex corrigido para acentos PT-BR (ã, ç, â) — 2026-04-13
 
 from pathlib import Path
 import re
@@ -32,21 +31,15 @@ EIXOS: dict[int, str] = {
 
 # -- Padroes de deteccao por palavras-chave --
 _EIXO_PATS: list[tuple[int, re.Pattern]] = [
-    (1, re.compile(r"cidad[ao]o|inclusiv|servi[cç]os digitais|unifica[cç][ao]o de canais", re.I)),
-    (2, re.compile(
-        r"integrad|colaborat|interoperab"
-        r"|cooper[ao]|compartilh|cat[aá]logo.*servi[cç]|barramento"
-        r"|plataforma.*integr|rede.*compartilh|ecossistema.*digital", re.I)),
-    (3, re.compile(r"inteligent|inovad|govern[aâ]n[cç]a.*dados|gest[ao]o.*dados", re.I)),
+    (1, re.compile(
+        r"cidad[aã]o|inclusiv|servi[cç]os\s*digitais"
+        r"|unifica[cç][aã]o\s*de\s*canais"
+        r"|melhoria\s*da\s*qualidade", re.I)),
+    (2, re.compile(r"integrad|colaborat|interoperab|cooper[aã]|compartilh", re.I)),
+    (3, re.compile(r"inteligent|inovad|govern[aâ]n[cç]a.*dados|gest[aã]o.*dados", re.I)),
     (4, re.compile(r"confi[aá]vel|segur|privacidade|ppsi", re.I)),
-    (5, re.compile(
-        r"transpar(?:en|ên)|aberto|participat|dados abertos"
-        r"|lai\b|lei.*acesso.*informa|acesso.*informa[çc][ao]o"
-        r"|ouvidoria|controle social|portal.*dados|fiscaliza[çc]", re.I)),
-    (6, re.compile(
-        r"efici[eê]n|eficient|sustent|desburocrat|simplifica[çc]"
-        r"|racionaliz|otimiz|redu[çc][ao]o.*custo|moderniza[çc]"
-        r"|digitaliza[çc].*processo|elimina[çc].*papel|automat", re.I)),
+    (5, re.compile(r"transpar(?:en|ên)|aberto|participat|dados abertos", re.I)),
+    (6, re.compile(r"efici[eê]n|sustent|desburocrat|simplifica[çc]", re.I)),
 ]
 
 _PAT_EIXO_NUM = re.compile(r"eixo\s*([1-6])\b|E[-.]([1-6])\b", re.I)
