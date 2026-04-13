@@ -1,10 +1,7 @@
 {
   "total_linhas": 257,
   "pct_ok": 88.3,
-  "parse_flags": {
-    "ok": 227,
-    "sem_produto": 30
-  },
+  "parse_flags": { "ok": 227, "sem_produto": 30 },
   "orgaos_processados": 10,
   "tempo_segundos": 316.2,
   "erros": [],
