@@ -1,12 +1,19 @@
-# Descobertas Factuais — Exploracao Docling (AGU)
+# Descobertas Factuais — Exploracao Docling
 
 Data: 2026-04-13
-PDF testado: AGU — Anexo de Entregas PTD 2025-2027 (538 KB, 2 paginas)
+PDFs testados:
+- AGU — Anexo de Entregas PTD 2025-2027 (538 KB, 2 paginas, **imagem pura**)
+- ANAC — Anexo de Entregas PTD 2025-2026 (220 KB, 1 pagina, **texto nativo**)
 
-## 1. Natureza do PDF
+## 1. Natureza dos PDFs
 
-O PDF da AGU e **imagem pura** (escaneado). pypdfium2 retorna 0 chars de texto nativo.
-Toda extracao depende 100% de OCR.
+| Orgao | Texto nativo? | Chars pypdfium2 | OCR necessario? |
+|-------|--------------|-----------------|-----------------|
+| AGU | NAO (imagem pura) | 0 | Sim (100%) |
+| ANAC | SIM | 22.395 | Nao |
+
+**Conclusao:** Alguns orgaos enviam PDF escaneado, outros enviam PDF com texto nativo.
+O pipeline precisa funcionar com ambos.
 
 ## 2. API Docling — Mapa Real
 
@@ -53,7 +60,9 @@ cell.col_span                → int
 cell.bbox                    → BoundingBox
 ```
 
-## 3. Estrutura das 3 tabelas
+## 3. Estrutura das tabelas
+
+### AGU (3 tabelas)
 
 | Tabela | Pagina | Rows x Cols | Colunas | Conteudo |
 |--------|--------|-------------|---------|----------|
@@ -61,40 +70,57 @@ cell.bbox                    → BoundingBox
 | 1 | 2 | 6x4 | sem header (PPSI ciclos) | Continuacao entregas PPSI |
 | 2 | 2 | 11x5 | Servico/Acao, Produto, Eixo, Area Responsavel, DtEntrega | Entregas ja realizadas (historico) |
 
-**Nota:** Tabela 1 nao tem header — colunas sao indices 0-3. Parece ser continuacao da tabela 0 (mesma estrutura mas sem cabecalho).
+### ANAC (3 tabelas)
 
-## 4. Problema critico: OCR e espacos
+| Tabela | Pagina | Rows x Cols | Colunas | Conteudo |
+|--------|--------|-------------|---------|----------|
+| 0 | 1 | 54x5 | Servico/Acao, Produto, Eixo, Area Responsavel, DtPactuada | Entregas pactuadas |
+| 1 | 1 | 72x5 | Servico/Acao, **Produto Eixo** (fundidos!), "", Area Responsavel, DtEntrega | Entregas realizadas |
+| 2 | 1 | 1x3 | (assinaturas) | Nao relevante |
 
-### RapidOCR (padrao do Docling)
+**Nota:** Tabela 1 da ANAC tem colunas "Produto" e "Eixo" fundidas num unico header "Produto Eixo".
 
-Texto vem **sem espacos entre palavras**:
+## 4. Problema critico: texto com palavras grudadas
 
-```
-'ReverdescricaodetodososservicosdaAGUnoportalgov.br'
-'ServicosDigitaiseMethoriadaQualidade'
-'Integracaoaferramentadeavaliacaodasatisfacao dosusuarios'
-```
+### Causa raiz
 
-- Aho-Corasick impossivel (busca "Integracao a ferramenta" nao acha "Integracaoaferramenta")
-- LLM col_map recebe lixo
-- Sem acentos
+O problema **NAO e do OCR**. Testamos com:
+- RapidOCR (padrao): texto grudado SEM acentos
+- Tesseract CLI: texto COM acentos mas ainda com grudados residuais
+- OCR desligado (ANAC, texto nativo): **mesmo problema de grudados**
 
-### Tesseract OCR (via TesseractCliOcrOptions)
+A causa e o **layout do proprio PDF**: glifos sem espaco entre si. Isso acontece tanto em PDFs escaneados (AGU) quanto em PDFs nativos (ANAC).
 
-Texto vem **com espacos e acentos**:
+### Padrao dos grudados
 
-```
-'Resolver pendência decorrente do protesto de títulos das autarquias e fundações públicas federais'
-'Integração à ferramenta de avaliação da satisfação dos usuários'
-'Serviços Digitais e Melhoria da Qualidade'
-```
+Os grudados sao **sistematicos e previsiveis** — sempre em pontos especificos:
 
-**Mas com problemas residuais:**
-- Rows 0-1 truncadas/cortadas (primeira linha da tabela perde texto)
-- Pipes `|` vazando de bordas de celula no OCR
-- DtPactuada frequentemente vazia
-- Algumas celulas com lixo de OCR ("enmncuo", "ETeeeeoeeoeeoe—")
-- Area Responsavel as vezes truncada ("SG" em vez de "SGE")
+| Padrao | Exemplo | Correcao |
+|--------|---------|----------|
+| `[a-z][A-Z]` | "daQualidade" | "da Qualidade" |
+| `[a-z][A-Z]` | "eDados" | "e Dados" |
+| `[a-z][A-Z]` | "emAcesso" | "em Acesso" |
+| `[a-z][A-Z]` | "ferramentade" | → nao pega (ambas minusculas) |
+
+### Quantificacao (ANAC, Tabela 0, 54 rows)
+
+- **63%** das rows tem pelo menos 1 palavra grudada
+- **2%** das rows tem overflow entre celulas (texto de uma coluna vaza para outra)
+- Grudados concentrados na coluna **Eixo** ("daQualidade", "eDados")
+- Overflow so em servicos com nome muito longo (Row 1)
+
+### RapidOCR vs Tesseract (AGU, PDF escaneado)
+
+| Aspecto | RapidOCR | Tesseract |
+|---------|----------|-----------|
+| Espacos entre palavras | Quase nenhum | Bom (maioria) |
+| Acentos | Nenhum | Sim |
+| Pipes nas celulas | Nao | Sim (|) |
+| DtPactuada | Presente | Vazia |
+| Lixo OCR | Pouco ("sensnsos") | Algum ("enmncuo") |
+| Primeira row | OK (grudada) | Truncada ("er") |
+
+**Decisao: usar Tesseract para PDFs escaneados** — texto muito superior apesar de artefatos residuais.
 
 ## 5. Configuracao Docling para Tesseract
 
@@ -121,19 +147,66 @@ converter = DocumentConverter(
 
 **Requisito de sistema:** `tesseract-ocr` e `tesseract-ocr-por` devem estar instalados.
 
-## 6. Opcoes de OCR disponiveis no Docling
+Para PDFs com texto nativo (como ANAC), o OCR pode ser desligado:
+```python
+pipeline_opts.do_ocr = False
+```
+
+## 6. Estrategia de pos-processamento
+
+### Passo 1: Corrigir palavras grudadas (regex)
+```python
+import re
+def fix_glued_words(text: str) -> str:
+    # Insere espaco entre minuscula e maiuscula
+    return re.sub(r'([a-záéíóúãõç])([A-ZÁÉÍÓÚÃÕÇ])', r'\1 \2', text)
+```
+
+### Passo 2: Strip de artefatos OCR
+```python
+def clean_ocr_artifacts(text: str) -> str:
+    text = text.strip('| ')           # pipes de borda
+    text = re.sub(r'\s+', ' ', text)  # espacos multiplos
+    return text.strip()
+```
+
+### Passo 3: Normalizar nomes de Eixo/Produto SGD
+Usar dicionario de formas canonicas para corrigir variantes:
+```python
+EIXOS_CANONICOS = {
+    "servicos digitais e melhoria da qualidade": "Serviços Digitais e Melhoria da Qualidade",
+    "unificacao de canais digitais": "Unificação de Canais Digitais",
+    "governanca e gestao de dados": "Governança e Gestão de Dados",
+    "seguranca e privacidade": "Segurança e Privacidade",
+}
+```
+
+### Passo 4: Detectar e classificar tipo de PDF
+```python
+import pypdfium2 as pdfium
+
+def pdf_has_native_text(path: str) -> bool:
+    pdf = pdfium.PdfDocument(path)
+    for i in range(len(pdf)):
+        text = pdf[i].get_textpage().get_text_range()
+        if len(text) > 50:
+            return True
+    return False
+```
+
+## 7. Opcoes de OCR disponiveis no Docling
 
 ```
 EasyOcrOptions
-RapidOcrOptions        ← padrao, texto grudado
+RapidOcrOptions        ← padrao, texto grudado sem acentos
 TesseractOcrOptions    ← binding Python
-TesseractCliOcrOptions ← CLI, melhor resultado
+TesseractCliOcrOptions ← CLI, melhor resultado para PT-BR
 OcrAutoOptions
 OcrMacOptions
 KserveV2OcrOptions
 ```
 
-## 7. Implicacoes para o pipeline
+## 8. Implicacoes para o pipeline
 
 ### O que funciona
 - `doc.tables` como lista
@@ -141,32 +214,32 @@ KserveV2OcrOptions
 - `table.prov[0].page_no` para localizacao
 - `table.data.table_cells` para acesso granular
 - Headers detectados via `cell.column_header == True`
-- Tesseract OCR produz texto legivel com espacos
+- Tesseract OCR produz texto legivel para PDFs escaneados
 
 ### O que precisa de correcao no ptd_extracao.py
 1. **Remover referencia a `doc.main_text`** — nao existe
-2. **Usar Tesseract** em vez de RapidOCR padrao
-3. **Pos-processamento de texto:**
-   - Strip de pipes `|` no inicio/fim do texto de celulas
-   - Merge de linhas truncadas (rows 0-1 podem ser continuacao)
-   - Limpeza de lixo OCR
-4. **Tratar tabela sem header** (tabela 1) como continuacao da tabela anterior
-5. **DtPactuada** pode precisar de extracao separada (coluna estreita, OCR falha)
+2. **Detectar tipo de PDF** (nativo vs escaneado) e ajustar OCR
+3. **Usar Tesseract** para PDFs escaneados
+4. **Pos-processamento de texto** (fix_glued_words + clean_ocr_artifacts)
+5. **Tratar headers fundidos** (ex: "Produto Eixo" da ANAC tabela 1)
+6. **Tratar tabela sem header** (ex: AGU tabela 1) como continuacao
 
-### O que NAO funciona para Aho-Corasick
-Mesmo com Tesseract, o texto de Produto vem como:
+### Aho-Corasick: viavel com pos-processamento
+Apos fix_glued_words + normalizacao, os nomes de Produto ficam legiveis:
 - "Integração à ferramenta de avaliação da satisfação dos usuários"
 - "Disponibilização em Acesso Digital"
 - "Integração ao Login Único"
+- "Migração de Serviço para Plataforma Unificada"
 
-Estes sao nomes reais de produtos SGD — Aho-Corasick pode funcionar se:
-- O dicionario usar formas com acento
-- Matching usar normalize(NFD) + casefold para comparacao fuzzy
+Aho-Corasick pode funcionar se:
+- Dicionario usar formas com acento (ou normalizar ambos para casefold+NFD)
+- Matching tolerar variantes menores
 
-## 8. Proximos passos
+## 9. Proximos passos
 
-1. [ ] Testar PDF de outro orgao (verificar se texto grudado e so AGU ou generalizado)
-2. [ ] Notebook 02: testar col_map LLM com headers reais
+1. [x] Testar PDF de outro orgao → ANAC testado, problema confirmado como generalizado
+2. [ ] Implementar pos-processamento (fix_glued_words + clean_ocr_artifacts)
 3. [ ] Corrigir ptd_extracao.py com base nestas descobertas
-4. [ ] Implementar pos-processamento (strip pipes, merge rows)
-5. [ ] Testar Aho-Corasick com texto Tesseract normalizado
+4. [ ] Notebook 02: testar col_map LLM com headers reais pos-processados
+5. [ ] Testar Aho-Corasick com texto normalizado
+6. [ ] Testar com 3o orgao para validar generalizacao
