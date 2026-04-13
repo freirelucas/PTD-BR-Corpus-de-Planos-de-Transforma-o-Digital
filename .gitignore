@@ -1,0 +1,5 @@
+# Outputs gerados pelo pipeline (nao commitar)
+ptd_corpus/
+*.pyc
+__pycache__/
+.env
