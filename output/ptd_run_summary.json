@@ -1,0 +1,20 @@
+{
+  "total_linhas": 257,
+  "pct_ok": 88.3,
+  "parse_flags": { "ok": 227, "sem_produto": 30 },
+  "orgaos_processados": 10,
+  "tempo_segundos": 316.2,
+  "erros": [],
+  "por_orgao": {
+    "ABIN": { "n_rows": 11, "pct_ok": 90.9 },
+    "AEB": { "n_rows": 46, "pct_ok": 100.0 },
+    "AGU": { "n_rows": 11, "pct_ok": 63.6 },
+    "ANA": { "n_rows": 19, "pct_ok": 73.7 },
+    "ANAC": { "n_rows": 72, "pct_ok": 77.8 },
+    "ANATEL": { "n_rows": 26, "pct_ok": 100.0 },
+    "ANEEL": { "n_rows": 3, "pct_ok": 100.0 },
+    "ANVISA": { "n_rows": 31, "pct_ok": 87.1 },
+    "BCB": { "n_rows": 23, "pct_ok": 100.0 },
+    "CGU": { "n_rows": 15, "pct_ok": 100.0 }
+  }
+}

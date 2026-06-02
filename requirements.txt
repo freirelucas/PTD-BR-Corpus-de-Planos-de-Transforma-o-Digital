@@ -1,0 +1,22 @@
+# PTD-BR Pipeline v2
+# Python 3.10+
+
+# Extracao PDF
+docling>=2.0
+docling-core>=2.0
+pdf2image>=1.16
+pytesseract>=0.3.10
+
+# Processamento
+pandas>=2.0
+pyahocorasick>=2.0
+
+# Scraping
+requests>=2.31
+beautifulsoup4>=4.12
+
+# LLM col-map (Estagio 3)
+anthropic>=0.40
+
+# .gitignore padrao
+# ptd_corpus/
